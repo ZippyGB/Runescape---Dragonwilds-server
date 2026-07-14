@@ -6,10 +6,10 @@ setlocal enabledelayedexpansion
 :: ==========================================
 set "SERVER_EXE=RSDragonwildsServer.exe"
 :: Change this to your location
-set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server" 
+set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server"
 set "APP_ID=4019830"
 :: Change this to your locaiton
-set "STEAMCMD_DIR=F:\SteamCMD" 
+set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
 
 :: Initialization
@@ -68,7 +68,7 @@ set "HH_MM=%CURRENT_TIME:~0,5%"
 
 :: HIGH OPTIMIZATION: Filter netstat by port via findstr before checking ESTABLISHED to drop CPU usage
 set "PLAYERS=0"
-for /f %%P in ('netstat -ano ^| findstr ":%PORT% " ^| findstr /i "ESTABLISHED" ^| find /c /v ""') do set "PLAYERS=%%P"
+for /f %%P in ('netstat -ano ^| findstr /r /c:":%PORT%[^0-9]" ^| findstr /i "ESTABLISHED" ^| find /c /v ""') do set "PLAYERS=%%P"
 
 :: OPTIMIZATION: Trailing spaces added inside the string to prevent layout ghosting artifacts
 for /f %%A in ('copy /Z "%~f0" nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Players: %PLAYERS%      %%A" <nul
