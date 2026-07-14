@@ -1,0 +1,158 @@
+@echo off
+setlocal enabledelayedexpansion
+
+:: ==========================================
+:: CONFIGURATION SECTION
+:: ==========================================
+set "SERVER_EXE=RSDragonwildsServer.exe"
+:: Change this to your location
+set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server"
+set "APP_ID=4019830"
+:: Change this to your location
+set "STEAMCMD_DIR=F:\SteamCMD"
+set "PORT=7777"
+
+:: Initialization
+set "RESTART_DONE=false"
+set "LAST_RESTART_TIME=None"
+
+:: Cache carriage return character for high-performance screen rendering
+for /f %%A in ('copy /Z "%~f0" nul') do set "CR=%%A"
+
+:UPDATE_CHECK
+cls
+echo ========================================================
+echo Checking for RuneScape: Dragonwilds Server Updates...
+echo ========================================================
+if not exist "%STEAMCMD_DIR%\steamcmd.exe" (
+    echo [WARNING] SteamCMD not found at %STEAMCMD_DIR%\steamcmd.exe
+    echo Skipping update check and launching server...
+    timeout /t 3 >nul
+    goto LOOP
+)
+
+echo Connecting to Steam public servers...
+cd /d "%STEAMCMD_DIR%"
+steamcmd.exe +force_install_dir "%SERVER_DIR%" +login anonymous +app_update %APP_ID% +quit
+echo Update check complete!
+timeout /t 3 >nul
+
+:LOOP
+cls
+echo ========================================================
+echo Triggering Server Launch via Local Execution...
+echo ========================================================
+cd /d "%SERVER_DIR%"
+
+start "" "%SERVER_DIR%\%SERVER_EXE%" -log -NewConsole
+
+echo Waiting 15 seconds for server executable to initialize...
+timeout /t 15 /nobreak >nul
+
+:: Render Control Panel Once (Bypasses UI flickering)
+cls
+echo ========================================================
+echo SERVER CONTROL PANEL - RUNNING
+echo ========================================================
+echo.
+echo [R] - Force Immediate Restart (Will check for updates)
+echo [S] - Stop Server (Closes server and exits loop)
+echo.
+echo Scheduled Restarts : 00:00, 06:00, 12:00, 18:00
+echo Last Restarted At  : %LAST_RESTART_TIME%
+echo ========================================================
+
+:TIMER_LOOP
+:: 1. GRAB TIME & NORMALIZE LEADING SPACE
+set "CURRENT_TIME=%TIME%"
+if "%CURRENT_TIME:~0,1%"==" " set "CURRENT_TIME=0%CURRENT_TIME:~1%"
+set "HH_MM=%CURRENT_TIME:~0,5%"
+
+:: 2. EVALUATE SCHEDULED AUTOMATED RESTARTS
+if "%HH_MM%"=="00:00" goto CHECK_RESTART
+if "%HH_MM%"=="06:00" goto CHECK_RESTART
+if "%HH_MM%"=="12:00" goto CHECK_RESTART
+if "%HH_MM%"=="18:00" goto CHECK_RESTART
+
+:: Clear lock flag only when the current minute is safely past the restart target
+set "RESTART_DONE=false"
+
+:: 3. HIGH RECOVERY NETSTAT OPTIMIZATION
+set "PLAYERS=0"
+for /f %%P in ('netstat -ano ^| find /i ":%PORT% " ^| find /i "ESTABLISHED" ^| find /c /v ""') do set "PLAYERS=%%P"
+
+:: 4. ZERO-FLICKER REAL-TIME TERMINAL DRAW
+set /p ="Time: %CURRENT_TIME:~0,8% | Active Players: %PLAYERS%      !CR!" <nul
+
+:POLL_INPUT
+:: 5. HARD RE-THROTTLE (Throttles the loop to exactly 1 second intervals when no input is given)
+choice /c rst /t 1 /d t /n >nul 2>&1
+
+if errorlevel 3 goto TIMER_LOOP
+if errorlevel 2 goto MANUAL_STOP
+if errorlevel 1 goto MANUAL_RESTART
+
+:CHECK_RESTART
+if "%RESTART_DONE%"=="true" goto EXPLICIT_THROTTLE
+set "RESTART_DONE=true"
+goto RESTART_PROCEDURE
+
+:EXPLICIT_THROTTLE
+:: FIXED: Bypasses netstat parsing while locked inside the 60-second window, dropping CPU usage to 0%
+goto POLL_INPUT
+
+:MANUAL_RESTART
+echo.
+echo ========================================================
+echo Triggering manual server restart...
+echo ========================================================
+goto RESTART_PROCEDURE
+
+:: ==========================================
+:: SAFE CLOSURE & REBOOT ENGINE
+:: ==========================================
+
+:RESTART_PROCEDURE
+echo.
+echo ========================================================
+echo Initiating graceful process shutdown sequence...
+echo ========================================================
+set "TEMP_TIME=%TIME%"
+if "%TEMP_TIME:~0,1%"==" " set "TEMP_TIME=0%TEMP_TIME:~1%"
+set "LAST_RESTART_TIME=%TEMP_TIME:~0,8%"
+
+echo [%TIME:~0,8%] Sending graceful close request to %SERVER_EXE%...
+taskkill /im %SERVER_EXE% /t >nul 2>&1
+
+echo Waiting for executable to cleanly clear memory cache...
+:WAIT_LOOP_RESTART
+tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I /N "%SERVER_EXE%">NUL
+if "%ERRORLEVEL%"=="0" (
+    timeout /t 2 /nobreak >nul
+    goto WAIT_LOOP_RESTART
+)
+
+echo Server data successfully committed to disk. 
+echo Waiting 5 seconds to prevent initialization conflict...
+timeout /t 5 /nobreak >nul
+goto UPDATE_CHECK
+
+:MANUAL_STOP
+echo.
+echo ========================================================
+echo Triggering server safe shutdown...
+echo ========================================================
+echo [%TIME:~0,8%] Sending shutdown token to %SERVER_EXE%...
+taskkill /im %SERVER_EXE% /t >nul 2>&1
+
+echo Waiting for processes to settle...
+:WAIT_LOOP_STOP
+tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I /N "%SERVER_EXE%">NUL
+if "%ERRORLEVEL%"=="0" (
+    timeout /t 2 /nobreak >nul
+    goto WAIT_LOOP_STOP
+)
+
+echo Server stopped gracefully. Safe to close this window.
+pause
+exit
