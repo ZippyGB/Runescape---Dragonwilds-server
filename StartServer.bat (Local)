@@ -12,6 +12,9 @@ set "APP_ID=4019830"
 set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
 
+:: LOG PATHING: Target the live Unreal Engine server log
+set "LOG_FILE=%SERVER_DIR%\RSDragonwilds\Saved\Logs\RSDragonwilds.log"
+
 :: Initialization
 set "RESTART_DONE=false"
 set "LAST_RESTART_TIME=None"
@@ -30,7 +33,6 @@ if not exist "%STEAMCMD_DIR%\steamcmd.exe" (
 
 echo Connecting to Steam public servers...
 cd /d "%STEAMCMD_DIR%"
-:: Highly optimized SteamCMD run: skips unnecessary validation steps unless required
 steamcmd.exe +force_install_dir "%SERVER_DIR%" +login anonymous +app_update %APP_ID% +quit
 echo Update check complete!
 timeout /t 3 >nul
@@ -42,7 +44,11 @@ echo Triggering Server Launch Directly...
 echo ========================================================
 cd /d "%SERVER_DIR%"
 
-:: FIXED: Start the executable directly with recommended logging & console flags
+:: NEW FIX: Delete the old log file to reset historical player join data
+if exist "%LOG_FILE%" (
+    del /f /q "%LOG_FILE%" >nul 2>&1
+)
+
 start "" "%SERVER_EXE%" -log -NewConsole -Port=%PORT%
 set "RESTART_DONE=false"
 
@@ -69,22 +75,25 @@ set "CURRENT_TIME=%TIME%"
 if "%CURRENT_TIME:~0,1%"==" " set "CURRENT_TIME=0%CURRENT_TIME:~1%"
 set "HH_MM=%CURRENT_TIME:~0,5%"
 
-:: OPTIMIZED UDP CONNECTION TRACKING:
-:: Loops through netstat's UDP table, looking specifically for traffic on port 7777.
-:: Since local connections use loopback addresses (127.0.0.1 or [::1]), this counts unique active sources.
+:: LOG-BASED PLAYER TRACKING ENGINE
 set "PLAYERS_COUNT=0"
-for /f "tokens=2" %%U in ('netstat -ano -p UDP ^| findstr /r /c:":%PORT%[^0-9]"') do (
-    :: Extract the remote host address (second token in netstat UDP lines)
-    set "ADDR=%%U"
-    :: Ignore the wildcards (0.0.0.0:* or [*]:*) which represent the server just listening.
-    :: If it has a specific loopback (127.0.0.1 / ::1) or external IP, count it as a player.
-    if not "!ADDR:~0,7!"=="0.0.0.0" if not "!ADDR:~0,3!"=="*.*" if not "!ADDR:~0,4!"=="[::]" (
-        set /a "PLAYERS_COUNT+=1"
-    )
+if exist "%LOG_FILE%" (
+    set "JOINS=0"
+    set "LEAVES=0"
+    
+    rem Count successful join events in the live file
+    for /f %%J in ('findstr /C:"Join succeeded" "%LOG_FILE%" ^| find /c /v ""') do set "JOINS=%%J"
+    
+    rem Count explicit player disconnection events
+    for /f %%L in ('findstr /C:"ClosePrivate" /C:"Destroyed PlayerController" "%LOG_FILE%" ^| find /c /v ""') do set "LEAVES=%%L"
+    
+    rem Calculate active players mathematically (Joins minus Leaves)
+    set /a "PLAYERS_COUNT=JOINS - LEAVES"
+    if !PLAYERS_COUNT! lss 0 set "PLAYERS_COUNT=0"
 )
 
-:: Smooth UI draw using carriage return 
-for /f %%A in ('copy /Z "%~f0" nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: %PLAYERS_COUNT%      %%A" <nul
+:: Smooth UI draw using carriage return (Fixed quote mapping on path expansion)
+for /f %%A in ('copy /Z "%~f0" nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      %%A" <nul
 
 :: Match the 60-second window before evaluating scheduled restarts
 if "%HH_MM%"=="00:00" goto CHECK_RESTART
@@ -96,7 +105,7 @@ if "%HH_MM%"=="18:00" goto CHECK_RESTART
 set "RESTART_DONE=false"
 
 :POLL_INPUT
-:: Reduced timeout to 1 second for a much more responsive clock update and input feel
+:: Choice polling engine
 choice /c rst /t 1 /d t /n >nul 2>&1
 
 if errorlevel 3 goto TIMER_LOOP
