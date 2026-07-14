@@ -5,9 +5,11 @@ setlocal enabledelayedexpansion
 :: CONFIGURATION SECTION
 :: ==========================================
 set "SERVER_EXE=RSDragonwildsServer.exe"
-set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server"
+:: Change this to your location
+set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server" 
 set "APP_ID=4019830"
-set "STEAMCMD_DIR=F:\SteamCMD"
+:: Change this to your locaiton
+set "STEAMCMD_DIR=F:\SteamCMD" 
 set "PORT=7777"
 
 :: Initialization
