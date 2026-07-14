@@ -8,9 +8,13 @@ set "SERVER_EXE=RSDragonwildsServer.exe"
 :: Change this to your location
 set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server"
 set "APP_ID=4019830"
-:: Change this to your locaiton
+:: Change this to your location
 set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
+
+:: LOG PATHING: Target the live Unreal Engine server log
+:: Change this to your location
+set "LOG_FILE=%SERVER_DIR%\RSDragonwilds\Saved\Logs\RSDragonwilds.log"
 
 :: Initialization
 set "RESTART_DONE=false"
@@ -37,17 +41,24 @@ timeout /t 3 >nul
 :LOOP
 cls
 echo ========================================================
-echo Triggering Server Launch via Steam Library...
+echo Triggering Server Launch Directly...
 echo ========================================================
 cd /d "%SERVER_DIR%"
 
-start steam://rungameid/%APP_ID%
+:: Reset old session log data to ensure connection count starts at 0
+if exist "%LOG_FILE%" (
+    del /f /q "%LOG_FILE%" >nul 2>&1
+)
+
+:: Start the executable directly with logging enabled (prevents Steam library client pop-ups)
+start "" "%SERVER_EXE%" -log -NewConsole -Port=%PORT%
 set "RESTART_DONE=false"
 
-echo Waiting 15 seconds for Steam to launch the server executable...
+echo Waiting 15 seconds for the server to initialize...
 timeout /t 15 /nobreak >nul
 
-:: Clean terminal render loop
+:: Draw the static control panel frame once to prevent flickering
+:RENDER_PANEL
 cls
 echo ========================================================
 echo SERVER CONTROL PANEL - RUNNING
@@ -61,19 +72,32 @@ echo Last Restarted At  : %LAST_RESTART_TIME%
 echo ========================================================
 
 :TIMER_LOOP
-:: Grab current time and patch leading spaces for single-digit hours
+:: Grab current time and patch leading spaces
 set "CURRENT_TIME=%TIME%"
 if "%CURRENT_TIME:~0,1%"==" " set "CURRENT_TIME=0%CURRENT_TIME:~1%"
 set "HH_MM=%CURRENT_TIME:~0,5%"
 
-:: HIGH OPTIMIZATION: Filter netstat by port via findstr before checking ESTABLISHED to drop CPU usage
-set "PLAYERS=0"
-for /f %%P in ('netstat -ano ^| findstr /r /c:":%PORT%[^0-9]" ^| findstr /i "ESTABLISHED" ^| find /c /v ""') do set "PLAYERS=%%P"
+:: LOG-BASED PLAYER TRACKING ENGINE
+set "PLAYERS_COUNT=0"
+if exist "%LOG_FILE%" (
+    set "JOINS=0"
+    set "LEAVES=0"
+    
+    rem Count successful join events in the live file
+    for /f %%J in ('findstr /C:"Join succeeded" "%LOG_FILE%" ^| find /c /v ""') do set "JOINS=%%J"
+    
+    rem Count explicit player disconnection events
+    for /f %%L in ('findstr /C:"ClosePrivate" /C:"Destroyed PlayerController" "%LOG_FILE%" ^| find /c /v ""') do set "LEAVES=%%L"
+    
+    rem Calculate active players mathematically (Joins minus Leaves)
+    set /a "PLAYERS_COUNT=JOINS - LEAVES"
+    if !PLAYERS_COUNT! lss 0 set "PLAYERS_COUNT=0"
+)
 
-:: OPTIMIZATION: Trailing spaces added inside the string to prevent layout ghosting artifacts
-for /f %%A in ('copy /Z "%~f0" nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Players: %PLAYERS%      %%A" <nul
+:: Smooth UI draw using carriage return (Safeguarded against folder name spaces)
+for /f %%A in ('copy /Z "%~f0" nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      %%A" <nul
 
-:: FIXED CRITICAL LOGIC: Match the 60-second window before evaluating flag resets
+:: Match the 60-second window before evaluating scheduled restarts
 if "%HH_MM%"=="00:00" goto CHECK_RESTART
 if "%HH_MM%"=="06:00" goto CHECK_RESTART
 if "%HH_MM%"=="12:00" goto CHECK_RESTART
@@ -83,8 +107,8 @@ if "%HH_MM%"=="18:00" goto CHECK_RESTART
 set "RESTART_DONE=false"
 
 :POLL_INPUT
-:: Poll every 5 seconds for user inputs
-choice /c rst /t 5 /d t /n >nul 2>&1
+:: Choice polling engine set to 1 second for highly responsive inputs and UI updates
+choice /c rst /t 1 /d t /n >nul 2>&1
 
 if errorlevel 3 goto TIMER_LOOP
 if errorlevel 2 goto MANUAL_STOP
