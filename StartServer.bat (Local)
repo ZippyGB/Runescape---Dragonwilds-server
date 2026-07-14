@@ -13,24 +13,9 @@ set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
 
 :: LOG PATHING: Target the live Unreal Engine server log
-:: Change this to your location
 set "LOG_FILE=%SERVER_DIR%\RSDragonwilds\Saved\Logs\RSDragonwilds.log"
 
-:: ==========================================
-:: INITIALIZATION (Runs once at startup)
-:: ==========================================
-:: 1. Generate a true Carriage Return character to prevent disk thrashing in the loop
-for /f %%A in ('copy /Z "%~f0" nul') do set "CR=%%A"
-
-:: 2. Resolve Steam Client location via Registry (falling back to default install path)
-set "STEAM_PATH="
-for /f "tokens=2*" %%A in ('reg query "HKCU\Software\Valve\Steam" /v "SteamExe" 2^>nul') do set "STEAM_PATH=%%B"
-if not defined STEAM_PATH (
-    if exist "C:\Program Files (x86)\Steam\steam.exe" (
-        set "STEAM_PATH=C:\Program Files (x86)\Steam\steam.exe"
-    )
-)
-
+:: Initialization
 set "RESTART_DONE=false"
 set "LAST_RESTART_TIME=None"
 
@@ -55,22 +40,17 @@ timeout /t 3 >nul
 :LOOP
 cls
 echo ========================================================
-echo Triggering Server Launch Natively Via Steam Client...
+echo Triggering Server Launch Directly From Local Storage...
 echo ========================================================
+cd /d "%SERVER_DIR%"
 
 :: Reset old session log data to ensure connection count starts at 0
 if exist "%LOG_FILE%" (
     del /f /q "%LOG_FILE%" >nul 2>&1
 )
 
-:: Direct the launch order through your Steam Client
-if defined STEAM_PATH (
-    echo [INFO] Directing launch command through Steam Client at: %STEAM_PATH%
-    start "" "%STEAM_PATH%" -applaunch %APP_ID%
-) else (
-    echo [WARNING] Steam installation path not found. Attempting URI Protocol...
-    start steam://rungameid/%APP_ID%
-)
+:: Direct local launch (Bypasses the Steam Client completely)
+start "" "%SERVER_EXE%" -log -NewConsole -Port=%PORT%
 set "RESTART_DONE=false"
 
 echo Waiting 15 seconds for the server to initialize...
@@ -118,8 +98,8 @@ if exist "%LOG_FILE%" (
     if !PLAYERS_COUNT! lss 0 set "PLAYERS_COUNT=0"
 )
 
-:: Display status line using cached carriage return
-set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      !CR!" <nul
+:: Display status line using stable, safe inline carriage return
+for /f %%A in ('copy /Z "%~f0" nul 2^>nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      %%A" <nul
 
 :: Evaluate scheduled restarts (HH:MM matching)
 if "%HH_MM%"=="00:00" goto CHECK_RESTART
@@ -165,7 +145,7 @@ set "TEMP_TIME=%TIME%"
 if "%TEMP_TIME:~0,1%"==" " set "TEMP_TIME=0%TEMP_TIME:~1%"
 set "LAST_RESTART_TIME=%TEMP_TIME:~0,8%"
 
-:: Call the Graceful Shutdown keystroke subroutine
+:: Call the Graceful Shutdown subroutine
 call :SEND_CON_EXIT
 
 echo Waiting for executable to cleanly clear memory cache...
@@ -195,7 +175,7 @@ echo ========================================================
 echo Triggering server safe shutdown...
 echo ========================================================
 
-:: Call the Graceful Shutdown keystroke subroutine
+:: Call the Graceful Shutdown subroutine
 call :SEND_CON_EXIT
 
 echo Waiting for processes to settle...
@@ -223,18 +203,6 @@ exit
 :: ==========================================
 :SEND_CON_EXIT
 echo [%TIME:~0,8%] Targeting server console window...
-:: Temporary VBS script to target the server window and send "exit" + Enter
-(
-echo Set WshShell = WScript.CreateObject^("WScript.Shell"^)
-echo If WshShell.AppActivate^("RSDragonwilds"^) Then
-echo     WScript.Sleep 500
-echo     WshShell.SendKeys "exit"
-echo     WScript.Sleep 100
-echo     WshShell.SendKeys "~"
-echo End If
-) > "%temp%\graceful_shutdown.vbs"
-
-:: Execute the keystroke trigger and immediately clean up the temp file
-cscript //nologo "%temp%\graceful_shutdown.vbs" >nul 2>&1
-del "%temp%\graceful_shutdown.vbs" >nul 2>&1
+:: Direct, crash-proof inline PowerShell to trigger window focus and send the 'exit' command
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; if ($ws.AppActivate('RSDragonwilds')) { Start-Sleep -Milliseconds 500; $ws.SendKeys('exit'); Start-Sleep -Milliseconds 100; $ws.SendKeys('~') }" >nul 2>&1
 exit /b
