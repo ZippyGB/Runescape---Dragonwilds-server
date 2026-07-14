@@ -79,17 +79,26 @@ set "CURRENT_TIME=%TIME%"
 if "%CURRENT_TIME:~0,1%"==" " set "CURRENT_TIME=0%CURRENT_TIME:~1%"
 set "HH_MM=%CURRENT_TIME:~0,5%"
 
-:: OPTIMIZED PLAYER TRACKING ENGINE
+:: HIGH-SPEED PLAYER TRACKING ENGINE
 set "PLAYERS_COUNT=0"
 if exist "%LOG_FILE%" (
     set "JOINS=0"
-    set "LEAVES=0"
+    set "L1=0"
+    set "L2=0"
+    set "L3=0"
     
-    :: Consolidated scanning: read the file once instead of twice to save disk cycles
-    for /f "tokens=1,2 delims=:" %%G in ('findstr /C:"Join succeeded" /C:"ClosePrivate" /C:"Destroyed PlayerController" "%LOG_FILE%" 2^>nul') do (
-        echo %%H | findstr /C:"Join succeeded" >nul && set /a "JOINS+=1"
-        echo %%H | findstr /C:"ClosePrivate" /C:"Destroyed PlayerController" >nul && set /a "LEAVES+=1"
-    )
+    :: Count Join events safely
+    for /f %%J in ('find /c "Join succeeded" ^< "%LOG_FILE%" 2^>nul') do set "JOINS=%%J"
+    
+    :: Count separate leave indicators individually to avoid double-quote stripping
+    for /f %%A in ('find /c "ClosePrivate" ^< "%LOG_FILE%" 2^>nul') do set "L1=%%A"
+    for /f %%B in ('find /c "Destroyed PlayerController" ^< "%LOG_FILE%" 2^>nul') do set "L2=%%B"
+    for /f %%C in ('find /c "UNetConnection::Close" ^< "%LOG_FILE%" 2^>nul') do set "L3=%%C"
+    
+    :: Use the highest recorded disconnection metric to avoid under-counting
+    set "LEAVES=!L1!"
+    if !L2! gtr !LEAVES! set "LEAVES=!L2!"
+    if !L3! gtr !LEAVES! set "LEAVES=!L3!"
     
     set /a "PLAYERS_COUNT=JOINS - LEAVES"
     if !PLAYERS_COUNT! lss 0 set "PLAYERS_COUNT=0"
@@ -130,29 +139,29 @@ echo ========================================================
 goto RESTART_PROCEDURE
 
 :: ==========================================
-:: GRACEFUL CLOSURE & REBOOT ENGINE
+:: GRACEFUL CLOSURE VIA CONSOLE
 :: ==========================================
 
 :RESTART_PROCEDURE
 echo.
 echo ========================================================
-echo Initiating process shutdown sequence...
+echo Initiating graceful console exit sequence...
 echo ========================================================
 set "TEMP_TIME=%TIME%"
 if "%TEMP_TIME:~0,1%"==" " set "TEMP_TIME=0%TEMP_TIME:~1%"
 set "LAST_RESTART_TIME=%TEMP_TIME:~0,8%"
 
-echo [%TIME:~0,8%] Sending graceful close request to %SERVER_EXE%...
-taskkill /im %SERVER_EXE% /t >nul 2>&1
+:: Call the Graceful Shutdown script
+call :SEND_CON_EXIT
 
-:: Wait up to 10 seconds for graceful shutdown before forcing
+echo Waiting for executable to cleanly clear memory cache...
 set "WAIT_COUNTER=0"
 :WAIT_LOOP_RESTART
 tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
 if "%ERRORLEVEL%"=="0" (
     set /a "WAIT_COUNTER+=1"
-    if !WAIT_COUNTER! gtr 5 (
-        echo [%TIME:~0,8%] Graceful close timed out. Forcing process termination...
+    if !WAIT_COUNTER! gtr 10 (
+        echo [%TIME:~0,8%] Graceful exit timed out. Forcing termination...
         taskkill /f /im %SERVER_EXE% /t >nul 2>&1
         goto POST_KILL_RESTART
     )
@@ -171,17 +180,18 @@ echo.
 echo ========================================================
 echo Triggering server safe shutdown...
 echo ========================================================
-echo [%TIME:~0,8%] Sending shutdown token to %SERVER_EXE%...
-taskkill /im %SERVER_EXE% /t >nul 2>&1
 
-:: Wait up to 10 seconds for graceful shutdown before forcing
+:: Call the Graceful Shutdown script
+call :SEND_CON_EXIT
+
+echo Waiting for processes to settle...
 set "WAIT_COUNTER=0"
 :WAIT_LOOP_STOP
 tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
 if "%ERRORLEVEL%"=="0" (
     set /a "WAIT_COUNTER+=1"
-    if !WAIT_COUNTER! gtr 5 (
-        echo [%TIME:~0,8%] Graceful close timed out. Forcing process termination...
+    if !WAIT_COUNTER! gtr 10 (
+        echo [%TIME:~0,8%] Graceful exit timed out. Forcing termination...
         taskkill /f /im %SERVER_EXE% /t >nul 2>&1
         goto POST_KILL_STOP
     )
@@ -193,3 +203,24 @@ if "%ERRORLEVEL%"=="0" (
 echo Server stopped. Safe to close this window.
 pause
 exit
+
+:: ==========================================
+:: KEYSTROKE INJECTION SUBROUTINE
+:: ==========================================
+:SEND_CON_EXIT
+echo [%TIME:~0,8%] Targeting server console window...
+:: Temporary VBS script to target the server window and send "exit" + Enter
+(
+echo Set WshShell = WScript.CreateObject^("WScript.Shell"^)
+echo If WshShell.AppActivate^("RSDragonwilds"^) Then
+echo     WScript.Sleep 500
+echo     WshShell.SendKeys "exit"
+echo     WScript.Sleep 100
+echo     WshShell.SendKeys "~"
+echo End If
+) > "%temp%\graceful_shutdown.vbs"
+
+:: Execute the keystroke trigger and immediately clean up the temp file
+cscript //nologo "%temp%\graceful_shutdown.vbs" >nul 2>&1
+del "%temp%\graceful_shutdown.vbs" >nul 2>&1
+exit /b
