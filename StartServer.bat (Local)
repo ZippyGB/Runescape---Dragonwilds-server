@@ -13,6 +13,7 @@ set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
 
 :: LOG PATHING: Target the live Unreal Engine server log
+:: Change this to your location
 set "LOG_FILE=%SERVER_DIR%\RSDragonwilds\Saved\Logs\RSDragonwilds.log"
 
 :: Initialization
