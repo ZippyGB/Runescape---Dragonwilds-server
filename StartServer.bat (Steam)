@@ -16,6 +16,9 @@ set "PORT=7777"
 :: Change this to your location
 set "LOG_FILE=%SERVER_DIR%\RSDragonwilds\Saved\Logs\RSDragonwilds.log"
 
+:: Generate a true Carriage Return character once (prevents constant disk reads in the loop)
+for /f %%A in ('copy /Z "%~f0" nul') do set "CR=%%A"
+
 :: Initialization
 set "RESTART_DONE=false"
 set "LAST_RESTART_TIME=None"
@@ -26,7 +29,7 @@ echo ========================================================
 echo Checking for RuneScape: Dragonwilds Server Updates...
 echo ========================================================
 if not exist "%STEAMCMD_DIR%\steamcmd.exe" (
-    echo [WARNING] SteamCMD not found at %STEAMCMD_DIR%\steamcmd.exe
+    echo [WARNING] SteamCMD not found at "%STEAMCMD_DIR%\steamcmd.exe"
     echo Skipping update check and launching server...
     timeout /t 3 >nul
     goto LOOP
@@ -41,23 +44,22 @@ timeout /t 3 >nul
 :LOOP
 cls
 echo ========================================================
-echo Triggering Server Launch Directly...
+echo Triggering Server Launch Via Steam Client...
 echo ========================================================
-cd /d "%SERVER_DIR%"
 
 :: Reset old session log data to ensure connection count starts at 0
 if exist "%LOG_FILE%" (
     del /f /q "%LOG_FILE%" >nul 2>&1
 )
 
-:: Start the executable directly with logging enabled (prevents Steam library client pop-ups)
-start "" "%SERVER_EXE%" -log -NewConsole -Port=%PORT%
+:: STEAM CLIENT LAUNCH PROMPT:
+:: This forces the local running Steam client to initiate the boot sequence.
+start steam://rungameid/%APP_ID%
 set "RESTART_DONE=false"
 
 echo Waiting 15 seconds for the server to initialize...
 timeout /t 15 /nobreak >nul
 
-:: Draw the static control panel frame once to prevent flickering
 :RENDER_PANEL
 cls
 echo ========================================================
@@ -72,42 +74,43 @@ echo Last Restarted At  : %LAST_RESTART_TIME%
 echo ========================================================
 
 :TIMER_LOOP
-:: Grab current time and patch leading spaces
+:: Grab current time and patch leading spaces (e.g., " 9:30" becomes "09:30")
 set "CURRENT_TIME=%TIME%"
 if "%CURRENT_TIME:~0,1%"==" " set "CURRENT_TIME=0%CURRENT_TIME:~1%"
 set "HH_MM=%CURRENT_TIME:~0,5%"
 
-:: LOG-BASED PLAYER TRACKING ENGINE
+:: OPTIMIZED PLAYER TRACKING ENGINE
 set "PLAYERS_COUNT=0"
 if exist "%LOG_FILE%" (
     set "JOINS=0"
     set "LEAVES=0"
     
-    rem Count successful join events in the live file
-    for /f %%J in ('findstr /C:"Join succeeded" "%LOG_FILE%" ^| find /c /v ""') do set "JOINS=%%J"
+    :: Consolidated scanning: read the file once instead of twice to save disk cycles
+    for /f "tokens=1,2 delims=:" %%G in ('findstr /C:"Join succeeded" /C:"ClosePrivate" /C:"Destroyed PlayerController" "%LOG_FILE%" 2^>nul') do (
+        echo %%H | findstr /C:"Join succeeded" >nul && set /a "JOINS+=1"
+        echo %%H | findstr /C:"ClosePrivate" /C:"Destroyed PlayerController" >nul && set /a "LEAVES+=1"
+    )
     
-    rem Count explicit player disconnection events
-    for /f %%L in ('findstr /C:"ClosePrivate" /C:"Destroyed PlayerController" "%LOG_FILE%" ^| find /c /v ""') do set "LEAVES=%%L"
-    
-    rem Calculate active players mathematically (Joins minus Leaves)
     set /a "PLAYERS_COUNT=JOINS - LEAVES"
     if !PLAYERS_COUNT! lss 0 set "PLAYERS_COUNT=0"
 )
 
-:: Smooth UI draw using carriage return (Safeguarded against folder name spaces)
-for /f %%A in ('copy /Z "%~f0" nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      %%A" <nul
+:: Display clean, flicker-free status line using the cached carriage return
+set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      !CR!" <nul
 
-:: Match the 60-second window before evaluating scheduled restarts
+:: Evaluate scheduled restarts (HH:MM matching)
 if "%HH_MM%"=="00:00" goto CHECK_RESTART
 if "%HH_MM%"=="06:00" goto CHECK_RESTART
 if "%HH_MM%"=="12:00" goto CHECK_RESTART
 if "%HH_MM%"=="18:00" goto CHECK_RESTART
 
-:: Only clear the lock flag if we are safely outside of the execution minute window
-set "RESTART_DONE=false"
+:: Only reset the execution lock flag outside of the 60-second scheduled restart minute window
+if not "%HH_MM%"=="00:00" if not "%HH_MM%"=="06:00" if not "%HH_MM%"=="12:00" if not "%HH_MM%"=="18:00" (
+    set "RESTART_DONE=false"
+)
 
 :POLL_INPUT
-:: Choice polling engine set to 1 second for highly responsive inputs and UI updates
+:: choice command pauses for 1 second, updating our clock display
 choice /c rst /t 1 /d t /n >nul 2>&1
 
 if errorlevel 3 goto TIMER_LOOP
@@ -127,13 +130,13 @@ echo ========================================================
 goto RESTART_PROCEDURE
 
 :: ==========================================
-:: SAFE CLOSURE & REBOOT ENGINE
+:: GRACEFUL CLOSURE & REBOOT ENGINE
 :: ==========================================
 
 :RESTART_PROCEDURE
 echo.
 echo ========================================================
-echo Initiating graceful process shutdown sequence...
+echo Initiating process shutdown sequence...
 echo ========================================================
 set "TEMP_TIME=%TIME%"
 if "%TEMP_TIME:~0,1%"==" " set "TEMP_TIME=0%TEMP_TIME:~1%"
@@ -142,14 +145,22 @@ set "LAST_RESTART_TIME=%TEMP_TIME:~0,8%"
 echo [%TIME:~0,8%] Sending graceful close request to %SERVER_EXE%...
 taskkill /im %SERVER_EXE% /t >nul 2>&1
 
-echo Waiting for executable to cleanly clear memory cache...
+:: Wait up to 10 seconds for graceful shutdown before forcing
+set "WAIT_COUNTER=0"
 :WAIT_LOOP_RESTART
-tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I /N "%SERVER_EXE%">NUL
+tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
 if "%ERRORLEVEL%"=="0" (
+    set /a "WAIT_COUNTER+=1"
+    if !WAIT_COUNTER! gtr 5 (
+        echo [%TIME:~0,8%] Graceful close timed out. Forcing process termination...
+        taskkill /f /im %SERVER_EXE% /t >nul 2>&1
+        goto POST_KILL_RESTART
+    )
     timeout /t 2 /nobreak >nul
     goto WAIT_LOOP_RESTART
 )
 
+:POST_KILL_RESTART
 echo Server data successfully committed to disk. 
 echo Waiting 5 seconds to prevent initialization conflict...
 timeout /t 5 /nobreak >nul
@@ -163,14 +174,22 @@ echo ========================================================
 echo [%TIME:~0,8%] Sending shutdown token to %SERVER_EXE%...
 taskkill /im %SERVER_EXE% /t >nul 2>&1
 
-echo Waiting for processes to settle...
+:: Wait up to 10 seconds for graceful shutdown before forcing
+set "WAIT_COUNTER=0"
 :WAIT_LOOP_STOP
-tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I /N "%SERVER_EXE%">NUL
+tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
 if "%ERRORLEVEL%"=="0" (
+    set /a "WAIT_COUNTER+=1"
+    if !WAIT_COUNTER! gtr 5 (
+        echo [%TIME:~0,8%] Graceful close timed out. Forcing process termination...
+        taskkill /f /im %SERVER_EXE% /t >nul 2>&1
+        goto POST_KILL_STOP
+    )
     timeout /t 2 /nobreak >nul
     goto WAIT_LOOP_STOP
 )
 
-echo Server stopped gracefully. Safe to close this window.
+:POST_KILL_STOP
+echo Server stopped. Safe to close this window.
 pause
 exit
