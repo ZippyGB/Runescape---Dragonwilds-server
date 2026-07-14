@@ -8,7 +8,7 @@ set "SERVER_EXE=RSDragonwildsServer.exe"
 :: Change this to your location
 set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server"
 set "APP_ID=4019830"
-:: Change this to your locaiton
+:: Change this to your location
 set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
 
@@ -16,7 +16,21 @@ set "PORT=7777"
 :: Change this to your location
 set "LOG_FILE=%SERVER_DIR%\RSDragonwilds\Saved\Logs\RSDragonwilds.log"
 
-:: Initialization
+:: ==========================================
+:: INITIALIZATION (Runs once at startup)
+:: ==========================================
+:: 1. Generate a true Carriage Return character to prevent disk thrashing in the loop
+for /f %%A in ('copy /Z "%~f0" nul') do set "CR=%%A"
+
+:: 2. Resolve Steam Client location via Registry (falling back to default install path)
+set "STEAM_PATH="
+for /f "tokens=2*" %%A in ('reg query "HKCU\Software\Valve\Steam" /v "SteamExe" 2^>nul') do set "STEAM_PATH=%%B"
+if not defined STEAM_PATH (
+    if exist "C:\Program Files (x86)\Steam\steam.exe" (
+        set "STEAM_PATH=C:\Program Files (x86)\Steam\steam.exe"
+    )
+)
+
 set "RESTART_DONE=false"
 set "LAST_RESTART_TIME=None"
 
@@ -26,7 +40,7 @@ echo ========================================================
 echo Checking for RuneScape: Dragonwilds Server Updates...
 echo ========================================================
 if not exist "%STEAMCMD_DIR%\steamcmd.exe" (
-    echo [WARNING] SteamCMD not found at %STEAMCMD_DIR%\steamcmd.exe
+    echo [WARNING] SteamCMD not found at "%STEAMCMD_DIR%\steamcmd.exe"
     echo Skipping update check and launching server...
     timeout /t 3 >nul
     goto LOOP
@@ -41,22 +55,27 @@ timeout /t 3 >nul
 :LOOP
 cls
 echo ========================================================
-echo Triggering Server Launch Directly...
+echo Triggering Server Launch Natively Via Steam Client...
 echo ========================================================
-cd /d "%SERVER_DIR%"
 
-:: NEW FIX: Delete the old log file to reset historical player join data
+:: Reset old session log data to ensure connection count starts at 0
 if exist "%LOG_FILE%" (
     del /f /q "%LOG_FILE%" >nul 2>&1
 )
 
-start "" "%SERVER_EXE%" -log -NewConsole -Port=%PORT%
+:: Direct the launch order through your Steam Client
+if defined STEAM_PATH (
+    echo [INFO] Directing launch command through Steam Client at: %STEAM_PATH%
+    start "" "%STEAM_PATH%" -applaunch %APP_ID%
+) else (
+    echo [WARNING] Steam installation path not found. Attempting URI Protocol...
+    start steam://rungameid/%APP_ID%
+)
 set "RESTART_DONE=false"
 
 echo Waiting 15 seconds for the server to initialize...
 timeout /t 15 /nobreak >nul
 
-:: Draw the static control panel frame once to prevent flickering
 :RENDER_PANEL
 cls
 echo ========================================================
@@ -71,39 +90,47 @@ echo Last Restarted At  : %LAST_RESTART_TIME%
 echo ========================================================
 
 :TIMER_LOOP
-:: Grab current time and patch leading spaces
+:: Grab current time and patch leading spaces (e.g., " 9:30" becomes "09:30")
 set "CURRENT_TIME=%TIME%"
 if "%CURRENT_TIME:~0,1%"==" " set "CURRENT_TIME=0%CURRENT_TIME:~1%"
 set "HH_MM=%CURRENT_TIME:~0,5%"
 
-:: LOG-BASED PLAYER TRACKING ENGINE
+:: HIGH-SPEED PLAYER TRACKING ENGINE
 set "PLAYERS_COUNT=0"
 if exist "%LOG_FILE%" (
     set "JOINS=0"
-    set "LEAVES=0"
+    set "L1=0" & set "L2=0" & set "L3=0"
     
-    rem Count successful join events in the live file
-    for /f %%J in ('findstr /C:"Join succeeded" "%LOG_FILE%" ^| find /c /v ""') do set "JOINS=%%J"
+    :: Count Join events safely
+    for /f %%J in ('find /c "Join succeeded" ^< "%LOG_FILE%" 2^>nul') do set "JOINS=%%J"
     
-    rem Count explicit player disconnection events
-    for /f %%L in ('findstr /C:"ClosePrivate" /C:"Destroyed PlayerController" "%LOG_FILE%" ^| find /c /v ""') do set "LEAVES=%%L"
+    :: Count leave indicators individually to avoid double-quote stripping
+    for /f %%A in ('find /c "ClosePrivate" ^< "%LOG_FILE%" 2^>nul') do set "L1=%%A"
+    for /f %%B in ('find /c "Destroyed PlayerController" ^< "%LOG_FILE%" 2^>nul') do set "L2=%%B"
+    for /f %%C in ('find /c "UNetConnection::Close" ^< "%LOG_FILE%" 2^>nul') do set "L3=%%C"
     
-    rem Calculate active players mathematically (Joins minus Leaves)
+    :: Resolve highest disconnect metric to prevent undercounting
+    set "LEAVES=!L1!"
+    if !L2! gtr !LEAVES! set "LEAVES=!L2!"
+    if !L3! gtr !LEAVES! set "LEAVES=!L3!"
+    
     set /a "PLAYERS_COUNT=JOINS - LEAVES"
     if !PLAYERS_COUNT! lss 0 set "PLAYERS_COUNT=0"
 )
 
-:: Smooth UI draw using carriage return (Fixed quote mapping on path expansion)
-for /f %%A in ('copy /Z "%~f0" nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      %%A" <nul
+:: Display status line using cached carriage return
+set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      !CR!" <nul
 
-:: Match the 60-second window before evaluating scheduled restarts
+:: Evaluate scheduled restarts (HH:MM matching)
 if "%HH_MM%"=="00:00" goto CHECK_RESTART
 if "%HH_MM%"=="06:00" goto CHECK_RESTART
 if "%HH_MM%"=="12:00" goto CHECK_RESTART
 if "%HH_MM%"=="18:00" goto CHECK_RESTART
 
-:: Only clear the lock flag if we are safely outside of the execution minute window
-set "RESTART_DONE=false"
+:: Only reset the execution lock flag outside of the scheduled restart minute windows
+if not "%HH_MM%"=="00:00" if not "%HH_MM%"=="06:00" if not "%HH_MM%"=="12:00" if not "%HH_MM%"=="18:00" (
+    set "RESTART_DONE=false"
+)
 
 :POLL_INPUT
 :: Choice polling engine
@@ -126,29 +153,37 @@ echo ========================================================
 goto RESTART_PROCEDURE
 
 :: ==========================================
-:: SAFE CLOSURE & REBOOT ENGINE
+:: GRACEFUL CLOSURE VIA CONSOLE
 :: ==========================================
 
 :RESTART_PROCEDURE
 echo.
 echo ========================================================
-echo Initiating graceful process shutdown sequence...
+echo Initiating graceful console exit sequence...
 echo ========================================================
 set "TEMP_TIME=%TIME%"
 if "%TEMP_TIME:~0,1%"==" " set "TEMP_TIME=0%TEMP_TIME:~1%"
 set "LAST_RESTART_TIME=%TEMP_TIME:~0,8%"
 
-echo [%TIME:~0,8%] Sending graceful close request to %SERVER_EXE%...
-taskkill /im %SERVER_EXE% /t >nul 2>&1
+:: Call the Graceful Shutdown keystroke subroutine
+call :SEND_CON_EXIT
 
 echo Waiting for executable to cleanly clear memory cache...
+set "WAIT_COUNTER=0"
 :WAIT_LOOP_RESTART
-tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I /N "%SERVER_EXE%">NUL
+tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
 if "%ERRORLEVEL%"=="0" (
+    set /a "WAIT_COUNTER+=1"
+    if !WAIT_COUNTER! gtr 10 (
+        echo [%TIME:~0,8%] Graceful exit timed out. Forcing termination...
+        taskkill /f /im %SERVER_EXE% /t >nul 2>&1
+        goto POST_KILL_RESTART
+    )
     timeout /t 2 /nobreak >nul
     goto WAIT_LOOP_RESTART
 )
 
+:POST_KILL_RESTART
 echo Server data successfully committed to disk. 
 echo Waiting 5 seconds to prevent initialization conflict...
 timeout /t 5 /nobreak >nul
@@ -159,17 +194,47 @@ echo.
 echo ========================================================
 echo Triggering server safe shutdown...
 echo ========================================================
-echo [%TIME:~0,8%] Sending shutdown token to %SERVER_EXE%...
-taskkill /im %SERVER_EXE% /t >nul 2>&1
+
+:: Call the Graceful Shutdown keystroke subroutine
+call :SEND_CON_EXIT
 
 echo Waiting for processes to settle...
+set "WAIT_COUNTER=0"
 :WAIT_LOOP_STOP
-tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I /N "%SERVER_EXE%">NUL
+tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
 if "%ERRORLEVEL%"=="0" (
+    set /a "WAIT_COUNTER+=1"
+    if !WAIT_COUNTER! gtr 10 (
+        echo [%TIME:~0,8%] Graceful exit timed out. Forcing termination...
+        taskkill /f /im %SERVER_EXE% /t >nul 2>&1
+        goto POST_KILL_STOP
+    )
     timeout /t 2 /nobreak >nul
     goto WAIT_LOOP_STOP
 )
 
-echo Server stopped gracefully. Safe to close this window.
+:POST_KILL_STOP
+echo Server stopped. Safe to close this window.
 pause
 exit
+
+:: ==========================================
+:: KEYSTROKE INJECTION SUBROUTINE
+:: ==========================================
+:SEND_CON_EXIT
+echo [%TIME:~0,8%] Targeting server console window...
+:: Temporary VBS script to target the server window and send "exit" + Enter
+(
+echo Set WshShell = WScript.CreateObject^("WScript.Shell"^)
+echo If WshShell.AppActivate^("RSDragonwilds"^) Then
+echo     WScript.Sleep 500
+echo     WshShell.SendKeys "exit"
+echo     WScript.Sleep 100
+echo     WshShell.SendKeys "~"
+echo End If
+) > "%temp%\graceful_shutdown.vbs"
+
+:: Execute the keystroke trigger and immediately clean up the temp file
+cscript //nologo "%temp%\graceful_shutdown.vbs" >nul 2>&1
+del "%temp%\graceful_shutdown.vbs" >nul 2>&1
+exit /b
