@@ -13,7 +13,6 @@ set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
 
 :: LOG PATHING: Target the live Unreal Engine server log
-:: Change this to your location
 set "LOG_FILE=%SERVER_DIR%\RSDragonwilds\Saved\Logs\RSDragonwilds.log"
 
 :: Initialization
@@ -133,10 +132,6 @@ echo Triggering manual server restart...
 echo ========================================================
 goto RESTART_PROCEDURE
 
-:: ==========================================
-:: GRACEFUL CLOSURE VIA CONSOLE
-:: ==========================================
-
 :RESTART_PROCEDURE
 echo.
 echo ========================================================
@@ -200,10 +195,10 @@ pause
 exit
 
 :: ==========================================
-:: KEYSTROKE INJECTION SUBROUTINE
+:: KEYSTROKE INJECTION SUBROUTINE (ISOLATED)
 :: ==========================================
 :SEND_CON_EXIT
 echo [%TIME:~0,8%] Targeting server console window...
-:: Direct, crash-proof inline PowerShell to trigger window focus and send the 'exit' command
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; if ($ws.AppActivate('RSDragonwilds')) { Start-Sleep -Milliseconds 500; $ws.SendKeys('exit'); Start-Sleep -Milliseconds 100; $ws.SendKeys('~') }" >nul 2>&1
+:: Updated target to handle variants of the executable/window name dynamically
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; if ($ws.AppActivate('RSDragonwilds') -or $ws.AppActivate('RSDragonwildsServer')) { Start-Sleep -Milliseconds 500; $ws.SendKeys('exit'); Start-Sleep -Milliseconds 100; $ws.SendKeys('~') }" >nul 2>&1
 exit /b
