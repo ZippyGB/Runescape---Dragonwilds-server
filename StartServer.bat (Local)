@@ -1,14 +1,13 @@
 @echo off
 setlocal enabledelayedexpansion
+title RuneScape Dragonwilds Server Manager (Direct TaskKill Engine)
 
 :: ==========================================
 :: CONFIGURATION SECTION
 :: ==========================================
 set "SERVER_EXE=RSDragonwildsServer.exe"
-:: Change this to your location
 set "SERVER_DIR=F:\SteamLibrary\steamapps\common\RuneScape Dragonwilds Dedicated Server"
 set "APP_ID=4019830"
-:: Change this to your location
 set "STEAMCMD_DIR=F:\SteamCMD"
 set "PORT=7777"
 
@@ -44,78 +43,69 @@ echo Triggering Server Launch Directly From Local Storage...
 echo ========================================================
 cd /d "%SERVER_DIR%"
 
-:: Reset old session log data to ensure connection count starts at 0
+:: Force delete old log safely
 if exist "%LOG_FILE%" (
     del /f /q "%LOG_FILE%" >nul 2>&1
 )
 
-:: Direct local launch (Bypasses the Steam Client completely)
+:: Direct local launch with log flags
 start "" "%SERVER_EXE%" -log -NewConsole -Port=%PORT%
 set "RESTART_DONE=false"
 
 echo Waiting 15 seconds for the server to initialize...
 timeout /t 15 /nobreak >nul
+cls
 
 :RENDER_PANEL
 cls
 echo ========================================================
-echo SERVER CONTROL PANEL - RUNNING
+echo SERVER CONTROL PANEL - RUNNING (DIRECT PROCESS CONTROL)
 echo ========================================================
 echo.
-echo [R] - Force Immediate Restart (Will check for updates)
-echo [S] - Stop Server (Closes server and exits loop)
+echo [R] - Force Immediate Kill/Restart
+echo [S] - Stop Server (Kills task and exits panel)
 echo.
 echo Scheduled Restarts : 00:00, 06:00, 12:00, 18:00
 echo Last Restarted At  : %LAST_RESTART_TIME%
 echo ========================================================
+echo.
 
 :TIMER_LOOP
-:: Grab current time and patch leading spaces (e.g., " 9:30" becomes "09:30")
 set "CURRENT_TIME=%TIME%"
 if "%CURRENT_TIME:~0,1%"==" " set "CURRENT_TIME=0%CURRENT_TIME:~1%"
 set "HH_MM=%CURRENT_TIME:~0,5%"
 
-:: HIGH-SPEED PLAYER TRACKING ENGINE
+:: PLAYER TRACKING ENGINE
 set "PLAYERS_COUNT=0"
 if exist "%LOG_FILE%" (
     set "JOINS=0"
     set "L1=0" & set "L2=0" & set "L3=0"
-    
-    :: Count Join events safely
     for /f %%J in ('find /c "Join succeeded" ^< "%LOG_FILE%" 2^>nul') do set "JOINS=%%J"
-    
-    :: Count leave indicators individually to avoid double-quote stripping
     for /f %%A in ('find /c "ClosePrivate" ^< "%LOG_FILE%" 2^>nul') do set "L1=%%A"
     for /f %%B in ('find /c "Destroyed PlayerController" ^< "%LOG_FILE%" 2^>nul') do set "L2=%%B"
     for /f %%C in ('find /c "UNetConnection::Close" ^< "%LOG_FILE%" 2^>nul') do set "L3=%%C"
-    
-    :: Resolve highest disconnect metric to prevent undercounting
     set "LEAVES=!L1!"
     if !L2! gtr !LEAVES! set "LEAVES=!L2!"
     if !L3! gtr !LEAVES! set "LEAVES=!L3!"
-    
     set /a "PLAYERS_COUNT=JOINS - LEAVES"
     if !PLAYERS_COUNT! lss 0 set "PLAYERS_COUNT=0"
 )
 
-:: Display status line using stable, safe inline carriage return
+:: Status bar line
 for /f %%A in ('copy /Z "%~f0" nul 2^>nul') do set /p ="Time: %CURRENT_TIME:~0,8% | Active Connections: !PLAYERS_COUNT!      %%A" <nul
 
-:: Evaluate scheduled restarts (HH:MM matching)
+:: Time execution routing
 if "%HH_MM%"=="00:00" goto CHECK_RESTART
 if "%HH_MM%"=="06:00" goto CHECK_RESTART
 if "%HH_MM%"=="12:00" goto CHECK_RESTART
 if "%HH_MM%"=="18:00" goto CHECK_RESTART
 
-:: Only reset the execution lock flag outside of the scheduled restart minute windows
 if not "%HH_MM%"=="00:00" if not "%HH_MM%"=="06:00" if not "%HH_MM%"=="12:00" if not "%HH_MM%"=="18:00" (
     set "RESTART_DONE=false"
 )
 
 :POLL_INPUT
-:: Choice polling engine
-choice /c rst /t 1 /d t /n >nul 2>&1
-
+choice /c rst /t 5 /d t /n >nul 2>&1
 if errorlevel 3 goto TIMER_LOOP
 if errorlevel 2 goto MANUAL_STOP
 if errorlevel 1 goto MANUAL_RESTART
@@ -128,77 +118,29 @@ goto RESTART_PROCEDURE
 :MANUAL_RESTART
 echo.
 echo ========================================================
-echo Triggering manual server restart...
+echo Killing server process for manual restart...
 echo ========================================================
 goto RESTART_PROCEDURE
 
 :RESTART_PROCEDURE
-echo.
-echo ========================================================
-echo Initiating graceful console exit sequence...
-echo ========================================================
 set "TEMP_TIME=%TIME%"
 if "%TEMP_TIME:~0,1%"==" " set "TEMP_TIME=0%TEMP_TIME:~1%"
 set "LAST_RESTART_TIME=%TEMP_TIME:~0,8%"
 
-:: Call the Graceful Shutdown subroutine
-call :SEND_CON_EXIT
+:: Hard terminate the application and its console window instantly
+taskkill /f /im %SERVER_EXE% /t >nul 2>&1
 
-echo Waiting for executable to cleanly clear memory cache...
-set "WAIT_COUNTER=0"
-:WAIT_LOOP_RESTART
-tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
-if "%ERRORLEVEL%"=="0" (
-    set /a "WAIT_COUNTER+=1"
-    if !WAIT_COUNTER! gtr 10 (
-        echo [%TIME:~0,8%] Graceful exit timed out. Forcing termination...
-        taskkill /f /im %SERVER_EXE% /t >nul 2>&1
-        goto POST_KILL_RESTART
-    )
-    timeout /t 2 /nobreak >nul
-    goto WAIT_LOOP_RESTART
-)
-
-:POST_KILL_RESTART
-echo Server data successfully committed to disk. 
-echo Waiting 5 seconds to prevent initialization conflict...
+echo Server process dropped. Cooling down memory caches...
 timeout /t 5 /nobreak >nul
 goto UPDATE_CHECK
 
 :MANUAL_STOP
 echo.
 echo ========================================================
-echo Triggering server safe shutdown...
+echo Terminating server process cleanly...
 echo ========================================================
+taskkill /f /im %SERVER_EXE% /t >nul 2>&1
 
-:: Call the Graceful Shutdown subroutine
-call :SEND_CON_EXIT
-
-echo Waiting for processes to settle...
-set "WAIT_COUNTER=0"
-:WAIT_LOOP_STOP
-tasklist /FI "IMAGENAME eq %SERVER_EXE%" 2>NUL | find /I "%SERVER_EXE%" >NUL
-if "%ERRORLEVEL%"=="0" (
-    set /a "WAIT_COUNTER+=1"
-    if !WAIT_COUNTER! gtr 10 (
-        echo [%TIME:~0,8%] Graceful exit timed out. Forcing termination...
-        taskkill /f /im %SERVER_EXE% /t >nul 2>&1
-        goto POST_KILL_STOP
-    )
-    timeout /t 2 /nobreak >nul
-    goto WAIT_LOOP_STOP
-)
-
-:POST_KILL_STOP
-echo Server stopped. Safe to close this window.
+echo Server stopped completely.
 pause
 exit
-
-:: ==========================================
-:: KEYSTROKE INJECTION SUBROUTINE (ISOLATED)
-:: ==========================================
-:SEND_CON_EXIT
-echo [%TIME:~0,8%] Targeting server console window...
-:: Updated target to handle variants of the executable/window name dynamically
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; if ($ws.AppActivate('RSDragonwilds') -or $ws.AppActivate('RSDragonwildsServer')) { Start-Sleep -Milliseconds 500; $ws.SendKeys('exit'); Start-Sleep -Milliseconds 100; $ws.SendKeys('~') }" >nul 2>&1
-exit /b
